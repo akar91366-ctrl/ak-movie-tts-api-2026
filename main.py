@@ -1,22 +1,14 @@
-
-import asyncio
-import io
 import re
 from typing import List
 
 import edge_tts
-import imageio_ffmpeg
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from pydub import AudioSegment
-
-AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
 
 app = FastAPI(
     title="AK Movie AI Studio - Burmese TTS API",
-    description="Burmese text-to-speech API using edge-tts.",
-    version="1.0.1",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -25,7 +17,6 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
 )
 
 VOICE_MAP = {
@@ -111,39 +102,58 @@ async def synthesize_chunk(text: str, voice: str) -> bytes:
             data.extend(item["data"])
 
     if not data:
-        raise RuntimeError("The TTS provider returned an empty audio chunk.")
+        raise RuntimeError("TTS provider returned empty audio.")
 
     return bytes(data)
 
 
 @app.get("/")
 async def health_check():
-    return {"status": "online", "service": "AK Movie AI Studio TTS API"}
+    return {
+        "status": "online",
+        "service": "AK Movie AI Studio TTS API",
+    }
 
 
 @app.get("/api/voices")
 async def get_voices():
     return {
         "voices": [
-            {"gender": "male", "name": "Thiha (မြန်မာ အမျိုးသား)", "voice_code": VOICE_MAP["male"]},
-            {"gender": "female", "name": "Nilar (မြန်မာ အမျိုးသမီး)", "voice_code": VOICE_MAP["female"]},
+            {
+                "gender": "male",
+                "name": "Thiha (မြန်မာ အမျိုးသား)",
+                "voice_code": VOICE_MAP["male"],
+            },
+            {
+                "gender": "female",
+                "name": "Nilar (မြန်မာ အမျိုးသမီး)",
+                "voice_code": VOICE_MAP["female"],
+            },
         ]
     }
 
 
 @app.get("/api/preview")
-async def preview_voice(gender: str = Query(default="female", pattern="^(male|female)$")):
-    voice = VOICE_MAP[gender]
-
+async def preview_voice(
+    gender: str = Query(default="female", pattern="^(male|female)$")
+):
     try:
-        audio = await synthesize_chunk(PREVIEW_TEXT[gender], voice)
+        audio = await synthesize_chunk(
+            PREVIEW_TEXT[gender],
+            VOICE_MAP[gender],
+        )
         return Response(
             content=audio,
             media_type="audio/mpeg",
-            headers={"Content-Disposition": f'inline; filename="preview_{gender}.mp3"'},
+            headers={
+                "Content-Disposition": f'inline; filename="preview_{gender}.mp3"'
+            },
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"TTS provider error: {str(exc)[:300]}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTS provider error: {str(exc)[:300]}",
+        )
 
 
 @app.post("/api/tts")
@@ -155,26 +165,31 @@ async def generate_tts(payload: TTSRequest):
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
     chunks = chunk_text(text)
-
     if not chunks:
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
     try:
-        combined = AudioSegment.empty()
+        audio_parts = []
 
         for chunk in chunks:
-            mp3_bytes = await synthesize_chunk(chunk, VOICE_MAP[gender])
-            segment = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
-            combined += segment
+            mp3_bytes = await synthesize_chunk(
+                chunk,
+                VOICE_MAP[gender],
+            )
+            audio_parts.append(mp3_bytes)
 
-        output = io.BytesIO()
-        combined.export(output, format="mp3", bitrate="128k")
+        combined = b"".join(audio_parts)
 
         return Response(
-            content=output.getvalue(),
+            content=combined,
             media_type="audio/mpeg",
-            headers={"Content-Disposition": 'attachment; filename="burmese_narration.mp3"'},
+            headers={
+                "Content-Disposition": 'attachment; filename="burmese_narration.mp3"'
+            },
         )
 
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"TTS generation failed: {str(exc)[:300]}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTS generation failed: {str(exc)[:300]}",
+        )
